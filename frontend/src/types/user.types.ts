@@ -23,7 +23,7 @@ export interface LoginCredentials {
 export interface LoginResponse {
   access_token: string;
   token_type: string;
-  user: User;
+  user_info: User;  // Changed from 'user' to match backend response
 }
 
 export interface AuthState {

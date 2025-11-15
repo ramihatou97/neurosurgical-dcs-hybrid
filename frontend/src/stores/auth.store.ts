@@ -24,9 +24,9 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await authService.login(credentials);
 
       token.value = response.access_token;
-      user.value = response.user;
+      user.value = response.user_info;  // Changed from response.user to match backend
 
-      authService.storeAuth(response.access_token, response.user);
+      authService.storeAuth(response.access_token, response.user_info);
 
       return { success: true };
     } catch (error: any) {
