@@ -429,7 +429,10 @@
     </div>
 
     <script>
-        const API_BASE_URL = 'http://localhost:8000';
+        // Auto-detect: use current host or fallback to localhost:8000
+        const API_BASE_URL = window.location.protocol === 'file:'
+            ? 'http://localhost:8000'
+            : window.location.origin;
         let currentUser = null;
         let authToken = null;
 
