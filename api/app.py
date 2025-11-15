@@ -2,7 +2,7 @@
 Enhanced FastAPI Application for Neurosurgical DCS Hybrid System
 
 Provides comprehensive API with:
-- OAuth2/JWT authentication (from complete_1)
+- OAuth2/JWT authentication (from complete_1) - NOW DB-BACKED
 - Processing endpoints (parallel/sequential options)
 - Learning system endpoints (submit, approve, review)
 - Audit logging for HIPAA compliance
@@ -26,18 +26,36 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 import logging
 import uuid
+import os
+from dotenv import load_dotenv
+from contextlib import contextmanager
+
+# --- DB IMPORTS (Fix #2) ---
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+# --- END DB IMPORTS ---
 
 # Import hybrid engine
 import sys
 sys.path.insert(0, '..')
 from src.engine import HybridNeurosurgicalDCSEngine
+# --- DB MODEL IMPORT (Fix #2) ---
+from src.database.models import User as UserModel, Base
+# --- END DB MODEL IMPORT ---
+
 
 # ========================= CONFIGURATION =========================
 
-# Security Configuration (from complete_1)
-SECRET_KEY = "your-secret-key-change-in-production-use-openssl-rand-hex-32"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 480  # 8 hours
+load_dotenv()
+
+# --- FIX #2: LOAD FROM ENVIRONMENT ---
+SECRET_KEY = os.getenv("SECRET_KEY", "default-fallback-secret-key-CHANGE-ME")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
+
+if "CHANGE-ME" in SECRET_KEY:
+    logging.warning("SECURITY WARNING: Using default SECRET_KEY. SET A REAL SECRET_KEY IN YOUR .env FILE.")
+# --- END FIX #2 ---
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -63,9 +81,12 @@ app = FastAPI(
 )
 
 # CORS configuration
+cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000")
+cors_origins = [origin.strip() for origin in cors_origins_str.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8000", "http://localhost:8080", "null"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -74,62 +95,43 @@ app.add_middleware(
 # Initialize hybrid engine (will be initialized on startup)
 engine: Optional[HybridNeurosurgicalDCSEngine] = None
 
-# ========================= DATA STORES (In-Memory for now) =========================
-# In production: Use database from src/database/models.py
+# ========================= DATABASE SESSION (Fix #2) =========================
 
-# Pre-computed bcrypt hashes to avoid runtime hashing issues
-USER_DATABASE = {
-    "admin": {
-        "username": "admin",
-        "full_name": "System Administrator",
-        "email": "admin@hospital.org",
-        "hashed_password": "$2b$12$Egb/PKG/5iNBPZ7Q3VZaEOOX/f0nX.qW1aBD5nwYuB1QMiyzT.5.u",  # admin123
-        "department": "it",
-        "role": "admin",
-        "permissions": ["read", "write", "approve", "manage"]
-    },
-    "clinician": {
-        "username": "clinician",
-        "full_name": "Clinical User",
-        "email": "clinician@hospital.org",
-        "hashed_password": "$2b$12$iZ4symqGjFoHECCjUM27iu/7rAUO2lRl1MpLiV/TPbE3MYnMrTaDu",  # clinical123
-        "department": "neurosurgery",
-        "role": "clinician",
-        "permissions": ["read", "write"]  # Can generate summaries
-    },
-    "reviewer": {
-        "username": "reviewer",
-        "full_name": "Reviewer User",
-        "email": "reviewer@hospital.org",
-        "hashed_password": "$2b$12$x.n2ic25yFrcU5eVWrfygeaYUI9ftqlzFTuBuYoyBxqo4ylyKdHva",  # review123
-        "department": "neurosurgery",
-        "role": "reviewer",
-        "permissions": ["read"]  # Read-only access
-    },
-    "dr.smith": {
-        "username": "dr.smith",
-        "full_name": "Dr. Sarah Smith",
-        "email": "sarah.smith@hospital.org",
-        "hashed_password": "$2b$12$1KqmSAFwQRuhfGdBA/eEQOVEXAkJpBnrcH32smMlR1iwSOp0rS16O",  # neurosurg123
-        "department": "neurosurgery",
-        "role": "attending",
-        "permissions": ["read", "write", "approve"]  # Can approve learning patterns
-    },
-    "dr.jones": {
-        "username": "dr.jones",
-        "full_name": "Dr. Michael Jones",
-        "email": "michael.jones@hospital.org",
-        "hashed_password": "$2b$12$ggQT.QxZwhJB3URIG3mUTegamt9aJzkfFsz1BuDB6tFbw8f5Yjp9O",  # resident456
-        "department": "neurosurgery",
-        "role": "resident",
-        "permissions": ["read", "write"]  # Cannot approve patterns
-    }
-}
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dev_neurosurgical_dcs.db")
+db_engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
 
-# Audit log storage
+# Create tables if they don't exist (for dev/SQLite)
+if "sqlite" in DATABASE_URL:
+    Base.metadata.create_all(bind=db_engine)
+
+@contextmanager
+def get_db_session():
+    """Provide a transactional scope around a series of operations."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def get_db():
+    """Dependency for FastAPI routes to get a DB session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ========================= REMOVED IN-MEMORY STORES =========================
+# --- FIX #2: REMOVED USER_DATABASE DICTIONARY ---
+
+# Audit log storage (still in-memory for this example, move to DB for full prod)
 AUDIT_LOG = []
 
-# Processing sessions (for uncertainty resolution workflow)
+# Processing sessions (in-memory for this example, move to DB for full prod)
 PROCESSING_SESSIONS = {}
 
 # ========================= PYDANTIC MODELS =========================
@@ -137,18 +139,18 @@ PROCESSING_SESSIONS = {}
 class Token(BaseModel):
     access_token: str
     token_type: str
-    user: Dict[str, Any]
+    user_info: Dict[str, Any]
 
 class TokenData(BaseModel):
     username: Optional[str] = None
 
 class User(BaseModel):
     username: str
-    full_name: str
-    email: str
-    department: str
-    role: str
-    permissions: List[str]
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    department: Optional[str] = None
+    role: Optional[str] = None
+    permissions: List[str] = []
 
 class ProcessRequest(BaseModel):
     documents: List[Dict]
@@ -186,25 +188,24 @@ class BulkImportResponse(BaseModel):
     suggested_documents: List[Dict[str, Any]]
     warnings: List[str] = []
 
-# ========================= AUTHENTICATION FUNCTIONS =========================
+# ========================= AUTHENTICATION FUNCTIONS (Fix #2) =========================
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify password against hash"""
-    # Truncate password to 72 bytes for bcrypt compatibility
     if isinstance(plain_password, str):
         plain_password = plain_password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
     return pwd_context.verify(plain_password, hashed_password)
 
-def get_user(username: str) -> Optional[Dict]:
+def get_user(username: str, db: Session) -> Optional[UserModel]:
     """Get user from database"""
-    return USER_DATABASE.get(username)
+    return db.query(UserModel).filter(UserModel.username == username).first()
 
-def authenticate_user(username: str, password: str) -> Optional[Dict]:
-    """Authenticate user with username and password"""
-    user = get_user(username)
+def authenticate_user(username: str, password: str, db: Session) -> Optional[UserModel]:
+    """Authenticate user with username and password from DB"""
+    user = get_user(username, db)
     if not user:
         return None
-    if not verify_password(password, user["hashed_password"]):
+    if not verify_password(password, user.hashed_password):
         return None
     return user
 
@@ -214,14 +215,14 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    """Get current user from JWT token"""
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    """Get current user from JWT token and DB"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -237,11 +238,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     except JWTError:
         raise credentials_exception
 
-    user_dict = get_user(username=token_data.username)
-    if user_dict is None:
+    user = get_user(username=token_data.username, db=db)
+    if user is None:
         raise credentials_exception
 
-    return User(**user_dict)
+    # Convert SQLAlchemy UserModel to Pydantic User model
+    return User(
+        username=user.username,
+        full_name=user.full_name,
+        email=user.email,
+        department=user.department,
+        role=user.role,
+        permissions=user.permissions if user.permissions else []
+    )
 
 def check_permission(user: User, permission: str):
     """Check if user has specific permission"""
@@ -256,6 +265,7 @@ def check_permission(user: User, permission: str):
 
 def log_audit_event(user: User, action: str, details: Dict):
     """Log audit event for compliance"""
+    # This should also be moved to the database for production
     event = {
         "timestamp": datetime.utcnow().isoformat(),
         "username": user.username,
@@ -274,7 +284,7 @@ async def startup_event():
     """Initialize engine on startup"""
     global engine
     engine = HybridNeurosurgicalDCSEngine(
-        redis_url="redis://localhost:6379",  # Configure via environment
+        redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"),
         enable_learning=True
     )
     await engine.initialize()
@@ -288,18 +298,21 @@ async def shutdown_event():
         await engine.shutdown()
         logger.info("Engine shutdown complete")
 
-# ========================= AUTHENTICATION ENDPOINTS =========================
+# ========================= AUTHENTICATION ENDPOINTS (Fix #2) =========================
 
 @app.post("/api/auth/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
     """
     Login endpoint - generates JWT token
 
     Returns access token for authenticated requests.
     """
-    user_dict = authenticate_user(form_data.username, form_data.password)
+    user = authenticate_user(form_data.username, form_data.password, db)
 
-    if not user_dict:
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -307,29 +320,26 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         )
 
     # Update last login
-    user_dict['last_login'] = datetime.utcnow().isoformat()
+    user.last_login = datetime.utcnow()
+    db.commit()
 
     # Create access token
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user_dict["username"]},
+        data={"sub": user.username},
         expires_delta=access_token_expires
     )
 
-    logger.info(f"User logged in: {user_dict['username']}")
+    logger.info(f"User logged in: {user.username}")
 
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": {
-            "id": user_dict.get("id", user_dict["username"]),
-            "username": user_dict["username"],
-            "email": user_dict["email"],
-            "full_name": user_dict["full_name"],
-            "is_active": user_dict.get("is_active", True),
-            "is_superuser": user_dict.get("role") == "admin",
-            "permissions": user_dict["permissions"],
-            "created_at": user_dict.get("created_at", datetime.utcnow().isoformat())
+        "user_info": {
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role,
+            "permissions": user.permissions
         }
     }
 
@@ -502,7 +512,7 @@ async def parse_bulk_documents(
         logger.error(f"Bulk import parse error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ========================= LEARNING SYSTEM ENDPOINTS =========================
+# ========================= LEARNING SYSTEM ENDPOINTS (Fix #1) =========================
 
 @app.post("/api/learning/feedback")
 async def submit_learning_feedback(
@@ -535,11 +545,19 @@ async def submit_learning_feedback(
             "fact_type": feedback_request.context.get('fact_type')
         })
 
-        # Save to Redis/Database (background task)
-        if request.apply_immediately and current_user.role == 'admin':
-            # Admin can immediately approve their own patterns
+        # --- FIX #1: Use feedback_request and check 'approve' permission ---
+        if feedback_request.apply_immediately and "approve" in current_user.permissions:
+        # --- END FIX #1 ---
+            # Admin or user with 'approve' permission can immediately approve
             engine.feedback_manager.approve_pattern(pattern_id, approved_by=current_user.username)
-            logger.info(f"Admin {current_user.username} auto-approved pattern {pattern_id[:8]}")
+            logger.info(f"User {current_user.username} auto-approved pattern {pattern_id[:8]}")
+
+            return {
+                "status": "success",
+                "pattern_id": pattern_id,
+                "pattern_status": "APPROVED",
+                "message": "Learning feedback submitted and auto-approved."
+            }
 
         return {
             "status": "success",
@@ -766,7 +784,8 @@ async def root():
             "NEW contradiction detection",
             "Learning system with approval workflow",
             "Parallel processing",
-            "Multi-level caching"
+            "Multi-level caching",
+            "Database-backed user authentication"
         ]
     }
 
@@ -801,6 +820,25 @@ async def general_exception_handler(request, exc):
 
 if __name__ == "__main__":
     import uvicorn
+    # This block is for direct execution, not for production
+    # Create a default admin user in the DB if it doesn't exist (for SQLite dev)
+    with get_db_session() as db:
+        admin = get_user("admin", db)
+        if not admin:
+            logger.info("Creating default 'admin' user with password 'admin123'")
+            admin_user = UserModel(
+                username="admin",
+                full_name="System Administrator",
+                email="admin@hospital.org",
+                hashed_password=pwd_context.hash("admin123"),
+                department="it",
+                role="admin",
+                permissions=["read", "write", "approve", "manage"],
+                is_active=True
+            )
+            db.add(admin_user)
+            db.commit()
+
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
