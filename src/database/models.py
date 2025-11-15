@@ -139,6 +139,7 @@ class ProcessingSession(Base):
     confidence_score = Column(Numeric(5, 4))
     requires_review = Column(Boolean, default=False)
     custom_metadata = Column(JSON)  # Additional session-specific metadata (renamed from metadata)
+    result_data = Column(JSON)  # Complete processing result (summary, timeline, metrics)
 
     # Relationships
     user = relationship("User", back_populates="sessions")

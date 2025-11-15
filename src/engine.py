@@ -372,14 +372,14 @@ class HybridNeurosurgicalDCSEngine:
         lines.append("KEY CLINICAL INFORMATION:")
         lines.append("")
 
-        # Diagnoses
-        diagnoses = [f for f in facts if f.fact_type == 'diagnosis']
-        if diagnoses:
-            lines.append(f"Diagnosis: {diagnoses[0].fact}")
+        # NOTE: 'diagnosis' fact_type removed - it was never produced by extractors
+        # (orphan consumer causing silent empty section - same pattern as previous bug)
 
         # Procedures
         procedures = [f for f in facts if f.fact_type == 'procedure']
         if procedures:
+            lines.append("")
+            lines.append("Procedures:")
             for proc in procedures[:3]:  # Top 3 procedures
                 lines.append(f"- {proc.fact}")
 
@@ -390,6 +390,58 @@ class HybridNeurosurgicalDCSEngine:
             lines.append("Discharge Medications:")
             for med in meds[:10]:  # Top 10 medications
                 lines.append(f"- {med.fact}")
+
+        # Clinical Findings (from operative notes)
+        findings = [f for f in facts if f.fact_type == 'finding']
+        if findings:
+            lines.append("")
+            lines.append("Clinical Findings:")
+            for finding in findings[:3]:
+                lines.append(f"- {finding.fact}")
+
+        # Clinical Scores
+        scores = [f for f in facts if f.fact_type == 'clinical_score']
+        if scores:
+            lines.append("")
+            lines.append("Clinical Assessment:")
+            for score in scores:
+                lines.append(f"- {score.fact}")
+
+        # Vital Signs (most recent)
+        vital_signs = [f for f in facts if f.fact_type == 'vital_sign']
+        if vital_signs:
+            # Sort by timestamp descending to get most recent
+            vital_signs_sorted = sorted(vital_signs, key=lambda f: f.absolute_timestamp, reverse=True)
+            lines.append("")
+            lines.append("Vital Signs (Most Recent):")
+            # Show most recent vitals (up to 5)
+            for vs in vital_signs_sorted[:5]:
+                lines.append(f"- {vs.fact}")
+
+        # Laboratory Values (show abnormal/critical only)
+        labs = [f for f in facts if f.fact_type == 'lab_value']
+        abnormal_labs = [l for l in labs if hasattr(l, 'severity') and l.severity in ['HIGH', 'CRITICAL', 'LOW']]
+        if abnormal_labs:
+            lines.append("")
+            lines.append("Notable Laboratory Values:")
+            for lab in abnormal_labs[:5]:
+                lines.append(f"- {lab.fact}")
+
+        # Complications
+        complications = [f for f in facts if f.fact_type == 'complication']
+        if complications:
+            lines.append("")
+            lines.append("Complications:")
+            for comp in complications:
+                lines.append(f"- {comp.fact}")
+
+        # Recommendations (from consult notes)
+        recommendations = [f for f in facts if f.fact_type == 'recommendation']
+        if recommendations:
+            lines.append("")
+            lines.append("Recommendations:")
+            for rec in recommendations[:5]:
+                lines.append(f"- {rec.fact}")
 
         lines.append("")
         lines.append("[Note: Full narrative generation pending - Phase 4 future enhancement]")

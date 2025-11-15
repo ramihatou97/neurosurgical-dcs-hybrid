@@ -21,12 +21,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 import logging
 import uuid
 import os
+import json
 from dotenv import load_dotenv
 from contextlib import contextmanager
 
@@ -181,8 +182,46 @@ class SuggestedDocument(BaseModel):
 
 class BulkImportResponse(BaseModel):
     status: str
-    suggested_documents: List[Dict[str, Any]]
+    suggestedDocuments: List[Dict[str, Any]]
+    totalCount: int
     warnings: List[str] = []
+    separatorUsed: str
+    metadata: Dict[str, Any]
+
+class SessionDetailResponse(BaseModel):
+    sessionId: str
+    status: str
+    createdAt: str
+    completedAt: Optional[str] = None
+    documentCount: int
+    confidenceScore: Optional[float] = None
+    requiresReview: bool
+    resultData: Dict[str, Any]  # Complete processing result
+
+    class Config:
+        from_attributes = True
+
+# ========================= UTILITY FUNCTIONS =========================
+
+def serialize_for_json(obj):
+    """
+    Recursively convert Python objects to JSON-serializable format
+
+    Handles:
+    - datetime.datetime → ISO 8601 string
+    - datetime.date → ISO 8601 string
+    - dict → recursively process values
+    - list → recursively process items
+    - other types → pass through
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {key: serialize_for_json(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    else:
+        return obj
 
 # ========================= AUTHENTICATION FUNCTIONS (Fix #2) =========================
 
@@ -430,12 +469,13 @@ async def process_documents(
                 "use_parallel": request_data.use_parallel,
                 "use_cache": request_data.use_cache,
                 "apply_learning": request_data.apply_learning
-            }
+            },
+            result_data=serialize_for_json(result)  # Convert datetime objects to ISO strings
         )
         db.add(db_session)
         db.commit()
 
-        result['session_id'] = str(session_id)
+        result['sessionId'] = str(session_id)  # camelCase to match frontend
 
         return result
 
@@ -492,8 +532,15 @@ async def parse_bulk_documents(
         if len(chunks) == 0:
             return BulkImportResponse(
                 status="error",
-                suggested_documents=[],
-                warnings=["No documents found in bulk text"]
+                suggestedDocuments=[],
+                totalCount=0,
+                warnings=["No documents found in bulk text"],
+                separatorUsed=separator,
+                metadata={
+                    'processorVersion': '1.0',
+                    'processingTimeMs': 0,
+                    'separatorType': bulk_request.separator_type
+                }
             )
 
         # Document type keywords for detection
@@ -530,24 +577,85 @@ async def parse_bulk_documents(
 
             # Create suggested document
             suggested_documents.append({
+                'index': idx,
                 'content': chunk,
-                'doc_type': doc_type,
-                'confidence': confidence,
-                'date': detected_date,
-                'author': None,  # Could be enhanced with author detection
-                'index': idx
+                'suggestedType': doc_type,
+                'typeConfidence': confidence,
+                'detectedDate': detected_date,
+                'detectedAuthor': None,  # Could be enhanced with author detection
+                'separatorUsed': separator,
+                'warnings': []
             })
 
         logger.info(f"Bulk parse: {len(suggested_documents)} documents suggested by {current_user.username}")
 
         return BulkImportResponse(
             status="success",
-            suggested_documents=suggested_documents,
-            warnings=warnings
+            suggestedDocuments=suggested_documents,
+            totalCount=len(suggested_documents),
+            warnings=warnings,
+            separatorUsed=separator,
+            metadata={
+                'processorVersion': '1.0',
+                'processingTimeMs': 0,  # Could be enhanced with actual timing
+                'separatorType': bulk_request.separator_type
+            }
         )
 
     except Exception as e:
         logger.error(f"Bulk import parse error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========================= SESSION ENDPOINTS =========================
+
+@app.get("/api/sessions/{session_id}", response_model=SessionDetailResponse)
+async def get_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve a processing session by ID
+
+    Returns complete session data including the generated summary,
+    timeline, uncertainties, and metrics.
+
+    Requires: User must own the session
+    """
+    check_permission(current_user, "read")
+
+    try:
+        # Parse UUID
+        try:
+            session_uuid = uuid.UUID(session_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+        # Query session
+        db_session = db.query(SessionModel).filter(
+            SessionModel.id == session_uuid,
+            SessionModel.user_id == current_user.id  # Security: user can only access their own sessions
+        ).first()
+
+        if not db_session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Return session data
+        return SessionDetailResponse(
+            sessionId=str(db_session.id),
+            status=db_session.status,
+            createdAt=db_session.created_at.isoformat() if db_session.created_at else None,
+            completedAt=db_session.completed_at.isoformat() if db_session.completed_at else None,
+            documentCount=db_session.document_count,
+            confidenceScore=float(db_session.confidence_score) if db_session.confidence_score else None,
+            requiresReview=db_session.requires_review,
+            resultData=db_session.result_data or {}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Session retrieval error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ========================= LEARNING SYSTEM ENDPOINTS (Fix #1 + Persistence Fix) =========================

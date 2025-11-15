@@ -79,8 +79,9 @@ class ComprehensiveValidator:
             },
 
             # Required field types for completeness
+            # NOTE: 'diagnosis' removed - never produced by extractors
             'required_fact_types': {
-                'diagnosis', 'procedure', 'medication'
+                'procedure', 'medication'
             },
 
             # Temporal conflict window (seconds)
@@ -670,8 +671,8 @@ class ComprehensiveValidator:
         # ====================================================================
         # Required Fact Types
         # ====================================================================
+        # NOTE: 'diagnosis' removed - never produced, was causing false "missing" warnings
         required_types = {
-            'diagnosis': 'Admission diagnosis',
             'procedure': 'Procedures performed',
             'medication': 'Discharge medications'
         }

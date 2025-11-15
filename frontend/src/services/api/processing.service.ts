@@ -29,13 +29,13 @@ export class ProcessingService {
   }
 
   /**
-   * Get processing session status
+   * Get processing session by ID
    *
    * @param sessionId - Processing session ID
-   * @returns Current processing status
+   * @returns Complete session data including result
    */
-  async getSessionStatus(sessionId: string): Promise<ProcessingResult> {
-    return apiClient.get<ProcessingResult>(`/api/process/${sessionId}`);
+  async getSession(sessionId: string): Promise<any> {
+    return apiClient.get<any>(`/api/sessions/${sessionId}`);
   }
 
   /**

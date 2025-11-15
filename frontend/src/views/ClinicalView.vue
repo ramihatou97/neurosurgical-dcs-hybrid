@@ -283,25 +283,15 @@
         </div>
       </div>
 
-      <!-- Step 3: Summary Generation (Placeholder) -->
-      <div v-if="currentStep === 3" class="bg-white rounded-lg shadow-sm p-8">
-        <div class="text-center py-12">
-          <svg class="mx-auto h-16 w-16 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <h2 class="mt-4 text-2xl font-bold text-gray-900">
-            Processing Complete!
-          </h2>
-          <p class="mt-2 text-sm text-gray-600">
-            Summary generation view coming soon.
-          </p>
-          <p class="mt-1 text-xs text-gray-500">
-            Session ID: {{ sessionId }}
-          </p>
+      <!-- Step 3: Summary Display -->
+      <div v-if="currentStep === 3">
+        <SummaryDisplayView v-if="sessionId" :session-id="sessionId" />
 
+        <!-- Start New Session Button -->
+        <div class="mt-6 text-center">
           <button
             @click="handleStartOver"
-            class="mt-6 px-6 py-2 text-sm font-medium text-primary-600 bg-primary-50 border border-primary-200 rounded-md hover:bg-primary-100"
+            class="px-6 py-2 text-sm font-medium text-primary-600 bg-primary-50 border border-primary-200 rounded-md hover:bg-primary-100"
           >
             Start New Session
           </button>
@@ -319,6 +309,7 @@ import { useAuth } from '@/composables/useAuth';
 import { useToast } from '@/composables/useToast';
 import BulkTextInput from '@/components/clinical/BulkTextInput.vue';
 import DocumentReviewCard from '@/components/clinical/DocumentReviewCard.vue';
+import SummaryDisplayView from '@/components/SummaryDisplayView.vue';
 
 /**
  * ClinicalView - Main Clinical Workflow

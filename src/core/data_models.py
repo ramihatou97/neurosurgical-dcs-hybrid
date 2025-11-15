@@ -427,6 +427,29 @@ class ResolutionRequest:
 # UTILITY FUNCTIONS
 # ============================================================================
 
+def _parse_iso_date(date_str: str) -> datetime:
+    """
+    Parse ISO 8601 date string, handling JavaScript toISOString() format
+
+    JavaScript's toISOString() produces: "2024-01-15T05:00:00.000Z"
+    Python's fromisoformat() (3.9) doesn't accept 'Z' suffix
+
+    This function handles both formats:
+    - With 'Z': "2024-01-15T05:00:00.000Z" → converts to "+00:00"
+    - Without 'Z': "2024-01-15T05:00:00" → passes through
+
+    Args:
+        date_str: ISO 8601 formatted date string
+
+    Returns:
+        datetime object
+    """
+    if date_str.endswith('Z'):
+        # Replace 'Z' (Zulu time = UTC) with explicit timezone
+        date_str = date_str[:-1] + '+00:00'
+    return datetime.fromisoformat(date_str)
+
+
 def create_clinical_document_from_dict(doc_dict: Dict) -> ClinicalDocument:
     """
     Convert dictionary to ClinicalDocument
@@ -434,7 +457,7 @@ def create_clinical_document_from_dict(doc_dict: Dict) -> ClinicalDocument:
     """
     return ClinicalDocument(
         doc_type=DocumentType(doc_dict.get('type', 'progress')),
-        timestamp=datetime.fromisoformat(doc_dict['date']) if 'date' in doc_dict else datetime.now(),
+        timestamp=_parse_iso_date(doc_dict['date']) if 'date' in doc_dict and doc_dict['date'] else datetime.now(),
         author=doc_dict.get('author', 'Unknown'),
         specialty=doc_dict.get('specialty', 'General'),
         content=doc_dict['content'],
