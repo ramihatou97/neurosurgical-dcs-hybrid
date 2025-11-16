@@ -26,6 +26,8 @@ from .core.data_models import (
     fact_to_dict
 )
 from .extraction.fact_extractor import HybridFactExtractor
+from .extraction.llm_extractor import LlmExtractor
+from .generation.narrative_generator import NarrativeGenerator
 from .processing.parallel_processor import ParallelProcessor
 from .processing.timeline_builder import EnhancedTimelineBuilder
 from .processing.validator import ComprehensiveValidator
@@ -72,9 +74,22 @@ class HybridNeurosurgicalDCSEngine:
         else:
             logger.info("Running without Redis cache (graceful degradation)")
 
-        # Initialize core components
-        self.extractor = HybridFactExtractor()
-        self.parallel_processor = ParallelProcessor(cache_manager=self.cache_manager)
+        # Initialize Smart Extractor with LLM fallback
+        # 1. Initialize NarrativeGenerator (which creates the LLM client)
+        self.narrative_generator = NarrativeGenerator()
+
+        # 2. Initialize the LLM Extractor and pass the client
+        self.llm_extractor = LlmExtractor(client=self.narrative_generator.get_client())
+
+        # 3. Initialize the Fact Extractor with LLM Extractor (Smart Extractor!)
+        self.extractor = HybridFactExtractor(llm_extractor=self.llm_extractor)
+
+        # 4. Initialize ParallelProcessor with the SHARED extractor (CRITICAL FIX)
+        self.parallel_processor = ParallelProcessor(
+            cache_manager=self.cache_manager,
+            extractor=self.extractor  # Pass shared instance for LLM fallback support
+        )
+
         self.timeline_builder = EnhancedTimelineBuilder()
         self.validator = ComprehensiveValidator()
 

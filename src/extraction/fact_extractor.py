@@ -26,6 +26,7 @@ from collections import defaultdict
 
 from ..core.data_models import HybridClinicalFact, ClinicalDocument, DocumentType
 from ..core.knowledge_base import ClinicalKnowledgeBase
+from .llm_extractor import LlmExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,20 @@ class HybridFactExtractor:
     - Total: ~200-500ms per document (cached: ~10ms)
     """
 
-    def __init__(self):
-        """Initialize extractor with clinical knowledge base"""
+    def __init__(self, llm_extractor: Optional[LlmExtractor] = None):
+        """
+        Initialize extractor with clinical knowledge base and optional LLM extractor
+
+        Args:
+            llm_extractor: Optional LLM extractor for smart fallback extraction.
+                          If None, regex-only extraction is used (backward compatible).
+        """
         self.knowledge_base = ClinicalKnowledgeBase()
-        logger.info("Hybrid fact extractor initialized with clinical knowledge base")
+        self.llm_extractor = llm_extractor
+        if self.llm_extractor:
+            logger.info("Hybrid fact extractor initialized with LLM-Fallback enabled")
+        else:
+            logger.info("Hybrid fact extractor initialized (Regex-Only Mode)")
 
     # ========================================================================
     # MAIN EXTRACTION ROUTING
@@ -77,6 +88,7 @@ class HybridFactExtractor:
         Extract facts from general documents (admission, progress, nursing notes)
 
         Extracts:
+        - Diagnoses (with LLM fallback)
         - Medications
         - Lab values
         - Clinical scores
@@ -85,7 +97,8 @@ class HybridFactExtractor:
         """
         facts = []
 
-        # Extract all fact types
+        # Extract all fact types (including diagnoses with LLM fallback)
+        facts.extend(self._extract_diagnoses(doc))
         facts.extend(self._extract_medications(doc))
         facts.extend(self._extract_labs(doc))
         facts.extend(self._extract_clinical_scores(doc))
@@ -93,6 +106,57 @@ class HybridFactExtractor:
         facts.extend(self._extract_temporal_references(doc))
 
         logger.debug(f"Extracted {len(facts)} facts from general document")
+        return self._deduplicate_facts(facts)
+
+    # ========================================================================
+    # DIAGNOSES - WITH LLM FALLBACK
+    # ========================================================================
+
+    def _extract_diagnoses(self, doc: ClinicalDocument) -> List[HybridClinicalFact]:
+        """
+        Extract diagnosis from general/consult notes.
+        Uses regex first, then LLM fallback if needed.
+
+        Returns:
+            List of diagnosis facts
+        """
+        facts = []
+        content = doc.content
+
+        # 1. Try Regex Patterns First
+        diag_patterns = [
+            r'diagnosis:?\s*([^\n]+)',
+            r'assessment:?\s*([^\n]+)',
+            r'pre-op diagnosis:?\s*([^\n]+)',
+            r'post-op diagnosis:?\s*([^\n]+)',
+            r'final diagnosis:?\s*([^\n]+)'
+        ]
+
+        for pattern in diag_patterns:
+            for match in re.finditer(pattern, content, re.I):
+                fact_text = match.group(1).strip("*- ")
+                # Filter out empty matches or "plan" sections
+                if fact_text and len(fact_text) > 5 and "plan" not in fact_text.lower():
+                    facts.append(HybridClinicalFact(
+                        fact=f"Diagnosis: {fact_text}",
+                        source_doc=f"{doc.doc_type.value}_{doc.timestamp}",
+                        source_line=content[:match.start()].count('\n'),
+                        timestamp=doc.timestamp,
+                        absolute_timestamp=doc.timestamp,
+                        confidence=0.95,
+                        fact_type='diagnosis',
+                        clinical_significance='HIGH',
+                        clinical_context={'extraction_method': 'regex'}
+                    ))
+
+        # 2. LLM Fallback (if regex failed and LLM available)
+        if not facts and self.llm_extractor:
+            logger.debug(f"Regex failed for Diagnosis in {doc.doc_type.value}. Attempting LLM fallback.")
+            llm_facts = self.llm_extractor.extract_diagnosis(doc)
+            if llm_facts:
+                logger.info(f"LLM successfully extracted {len(llm_facts)} diagnosis fact(s)")
+            facts.extend(llm_facts)
+
         return facts
 
     # ========================================================================
@@ -418,28 +482,30 @@ class HybridFactExtractor:
         facts.extend(self._extract_labs(doc))
         facts.extend(self._extract_clinical_scores(doc))
 
-        return facts
+        return self._deduplicate_facts(facts)
 
     def _extract_procedures(self, doc: ClinicalDocument) -> List[HybridClinicalFact]:
         """
-        Extract surgical procedures from operative note
-        Source: complete_1 engine lines 205-230
+        Extract surgical procedures from operative note.
+        Uses regex first, then LLM fallback if needed.
+        Source: complete_1 engine lines 205-230 (enhanced with LLM fallback)
         """
         facts = []
         content = doc.content
 
-        # Procedure patterns (complete_1 approach)
+        # 1. Try Regex Patterns First
         procedure_patterns = [
             r'procedure[s]?\s*performed?:?\s*([^\n]+)',
             r'operation:?\s*([^\n]+)',
             r'surgical\s+procedure:?\s*([^\n]+)',
-            r'(?:underwent|performed)\s+([^\n]+?(?:craniotomy|clipping|coiling|resection|biopsy)[^\n]*)'
+            r'(?:underwent|performed)\s+([^\n]+?(?:craniotomy|clipping|coiling|resection|biopsy)[^\n]*)',
+            r'Procedures\n\*([^\n]+)'  # Pattern for bullet-pointed procedures
         ]
 
         for pattern in procedure_patterns:
             match = re.search(pattern, content, re.I)
             if match:
-                procedure_text = match.group(1).strip()
+                procedure_text = match.group(1).strip("*- ")
 
                 fact = HybridClinicalFact(
                     fact=f"Procedure: {procedure_text}",
@@ -450,11 +516,19 @@ class HybridFactExtractor:
                     confidence=0.95,  # High confidence in operative notes
                     fact_type="procedure",
                     clinical_significance='HIGH',
-                    clinical_context={'document_type': 'operative'}
+                    clinical_context={'document_type': 'operative', 'extraction_method': 'regex'}
                 )
 
                 facts.append(fact)
                 break  # Only extract first procedure description
+
+        # 2. LLM Fallback (if regex failed and LLM available)
+        if not facts and self.llm_extractor:
+            logger.debug("Regex failed for Procedure in Operative Note. Attempting LLM fallback.")
+            llm_facts = self.llm_extractor.extract_procedure(doc)
+            if llm_facts:
+                logger.info(f"LLM successfully extracted {len(llm_facts)} procedure fact(s)")
+            facts.extend(llm_facts)
 
         return facts
 
@@ -552,6 +626,9 @@ class HybridFactExtractor:
         # Extract recommendations
         facts.extend(self._extract_recommendations(doc))
 
+        # Extract diagnoses (with LLM fallback)
+        facts.extend(self._extract_diagnoses(doc))
+
         # Specialty-specific extraction (complete_1 approach)
         if doc.specialty and doc.specialty.lower() in ['infectious disease', 'id']:
             facts.extend(self._extract_id_specific(doc))
@@ -562,7 +639,7 @@ class HybridFactExtractor:
         facts.extend(self._extract_medications(doc))
         facts.extend(self._extract_labs(doc))
 
-        return facts
+        return self._deduplicate_facts(facts)
 
     def _extract_recommendations(self, doc: ClinicalDocument) -> List[HybridClinicalFact]:
         """

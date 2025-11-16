@@ -60,6 +60,7 @@ services:
       - REQUIRE_LEARNING_APPROVAL=true
       - USE_CACHE=true
       - USE_PARALLEL_PROCESSING=true
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
       - ./logs:/app/logs
       - ./frontend:/app/frontend:ro

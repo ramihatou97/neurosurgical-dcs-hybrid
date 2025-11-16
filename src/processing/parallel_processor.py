@@ -57,20 +57,26 @@ class ParallelProcessor:
     - Validation (needs complete timeline)
     """
 
-    def __init__(self, cache_manager: Optional[RedisCacheManager] = None):
+    def __init__(
+        self,
+        cache_manager: Optional[RedisCacheManager] = None,
+        extractor: Optional[HybridFactExtractor] = None
+    ):
         """
         Initialize parallel processor
 
         Args:
             cache_manager: Optional Redis cache manager for caching
+            extractor: Optional fact extractor instance. If None, creates new instance.
+                      IMPORTANT: Pass the shared extractor from engine for LLM fallback support.
         """
         self.cache_manager = cache_manager
-        self.extractor = HybridFactExtractor()
+        self.extractor = extractor if extractor is not None else HybridFactExtractor()
         self.temporal_resolver = TemporalResolver()
         self.timeline_builder = EnhancedTimelineBuilder()
         self.validator = ComprehensiveValidator()
 
-        logger.info("Parallel processor initialized")
+        logger.info("Parallel processor initialized (with shared extractor)" if extractor else "Parallel processor initialized")
 
     # ========================================================================
     # PARALLEL DOCUMENT PROCESSING
